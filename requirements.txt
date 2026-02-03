@@ -1,0 +1,19 @@
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+torch
+torchaudio
+torchvision
+
+datasets
+accelerate
+transformers
+trl
+peft
+bitsandbytes
+sentencepiece
+safetensors
+
+numpy
+tqdm
+packaging
+pyyaml

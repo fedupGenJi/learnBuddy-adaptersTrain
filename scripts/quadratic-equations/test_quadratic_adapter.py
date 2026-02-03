@@ -1,0 +1,125 @@
+import json
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+from peft import PeftModel
+
+BASE = "Qwen/Qwen2.5-7B-Instruct"
+ADAPTER = "adapters/quadratic_v1"   # <-- your quadratic adapter
+
+def extract_json(text: str):
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None, "Could not find JSON braces in output."
+
+    candidate = text[start:end+1].strip()
+
+    try:
+        return json.loads(candidate), None
+    except Exception as e:
+        return candidate, f"JSON parse error: {e}"
+
+def run_generation(model, tokenizer, prompt: str, max_new_tokens: int = 350):
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    with torch.no_grad():
+        out = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=True,
+            temperature=0.7,
+            top_p=0.9,
+        )
+    return tokenizer.decode(out[0], skip_special_tokens=True)
+
+def main():
+    print("Loading base model + quadratic adapter...")
+
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_compute_dtype=torch.float16,
+    )
+
+    tokenizer = AutoTokenizer.from_pretrained(BASE, use_fast=True)
+
+    base_model = AutoModelForCausalLM.from_pretrained(
+        BASE,
+        quantization_config=bnb_config,
+        device_map={"": 0},
+        attn_implementation="sdpa",
+    )
+    base_model.config.use_cache = False
+
+    model = PeftModel.from_pretrained(base_model, ADAPTER)
+    model.eval()
+
+    # -----------------------
+    # Test 1: generate_mcq
+    # -----------------------
+    prompt_mcq = """SYSTEM:
+You are an NEB Grade 10 Mathematics question generator for the chapter Quadratic Equations.
+Output MUST be STRICT JSON only. No markdown, no explanation outside JSON.
+
+USER:
+Task: generate_mcq
+Chapter: Quadratic Equations
+Difficulty: 2
+Rules:
+- Create ONE NEB-style quadratic equation problem.
+- Provide 4 options (A,B,C,D).
+- Exactly ONE option is correct.
+- The 3 wrong options must be based on common student mistakes.
+- Include distractor mistake tags and short reasons.
+
+Return JSON ONLY with keys:
+question, options, correct_option, answer_explanation, distractor_rationales, meta
+"""
+
+    print("\n===== OUTPUT: generate_mcq =====")
+    raw_mcq = run_generation(model, tokenizer, prompt_mcq, max_new_tokens=350)
+    print(raw_mcq)
+
+    parsed_mcq, err = extract_json(raw_mcq)
+    if err:
+        print("\n[!] Could not parse strict JSON:", err)
+        if isinstance(parsed_mcq, str):
+            print("Extracted candidate JSON string:\n", parsed_mcq)
+    else:
+        print("\n[OK] Parsed JSON object:")
+        print(json.dumps(parsed_mcq, indent=2, ensure_ascii=False))
+
+    # -----------------------
+    # Test 2: solve
+    # -----------------------
+    sample_q = "Solve: x^2 - 7x + 10 = 0"
+
+    prompt_solve = f"""SYSTEM:
+You are an NEB Grade 10 Mathematics tutor for the chapter Quadratic Equations.
+Output MUST be STRICT JSON only. No markdown, no extra text.
+
+USER:
+Task: solve
+Show full steps and final answer in JSON.
+Question: {sample_q}
+
+Return JSON ONLY with keys:
+given, to_find, steps, final_answer
+"""
+
+    print("\n===== OUTPUT: solve =====")
+    raw_solve = run_generation(model, tokenizer, prompt_solve, max_new_tokens=450)
+    print(raw_solve)
+
+    parsed_solve, err = extract_json(raw_solve)
+    if err:
+        print("\n[!] Could not parse strict JSON:", err)
+        if isinstance(parsed_solve, str):
+            print("Extracted candidate JSON string:\n", parsed_solve)
+    else:
+        print("\n[OK] Parsed JSON object:")
+        print(json.dumps(parsed_solve, indent=2, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()
