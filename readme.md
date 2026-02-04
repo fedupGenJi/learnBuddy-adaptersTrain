@@ -63,3 +63,11 @@ Each chapter has its own dedicated LoRA training script.
 Each chapter has its own dedicated LoRA testing script.
 
 ---
+
+## Routing Part
+
+Commands:
+python routing/question_generator.py --samples_per_label 600 --none_ratio 0.30 --fresh
+python routing/prepare_data.py --valid_ratio 0.05
+python routing/train_router_lora.py --out adapters/router_lora --grad_ckpt
+python routing/test_router.py --adapter adapters/router_lora
